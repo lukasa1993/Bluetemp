@@ -28,7 +28,7 @@ Picoserve and sht4x are **community crates, not Embassy-owned drivers**. They in
 
 **Upload policy.** Picoserve parses the HTTP request. The application’s middleware rejects ambiguous/duplicate lengths, unsupported Transfer-Encoding/Expect headers and malformed/duplicate authentication fields. The inspected picoserve parser takes the first Content-Length and treats a missing/unparseable length as zero; it does not enforce our authenticated fixed-length upload contract. That policy must remain in an application layer. The application also owns the routes, text format, stale-reading status, image identity and authentication domain.
 
-**ESP boot selection records.** This is the one substantial format-specific exception, implemented in `src/ota_record.rs` using the community CRC crate. The alternatives were checked directly:
+**ESP boot selection records.** This is the one substantial format-specific exception, implemented in `crates/bluetemp-ota/src/ota_record.rs` using the community CRC crate. The alternatives were checked directly:
 
 - [embassy-boot 0.7.0](https://docs.rs/crate/embassy-boot/0.7.0/source/README.md) uses ACTIVE, DFU and BOOTLOADER STATE partitions and writes swap/boot magic with `FirmwareUpdater::mark_updated()` / `mark_booted()`. Its published platform integrations are NRF, RP and STM32. No supported ESP32 integration was found. Its state protocol is not understood by the standard ESP-IDF second-stage bootloader. Substituting only `FirmwareUpdater` would produce an update the installed bootloader cannot activate. See the [Embassy bootloader documentation](https://embassy.dev/book/#_bootloader).
 - Official [esp-bootloader-esp-idf 0.6.0 OtaUpdater source](https://docs.rs/crate/esp-bootloader-esp-idf/0.6.0/source/src/ota_updater.rs): when erased otadata reports Factory but OTA0 actually booted, `next_ota_part()` reaches the collision branch and calls `Factory.ota_app_number()`, subtracting the OTA subtype base from zero. Its [record reader](https://docs.rs/crate/esp-bootloader-esp-idf/0.6.0/source/src/ota.rs) also errors on a torn record rather than recovering using the other valid record. The application still uses the official partition parser and actual booted-partition API.
@@ -46,3 +46,19 @@ A supported ESP32 port of embassy-boot, or a corrected official ESP OTA helper, 
 - [Embassy Watch](https://docs.rs/embassy-sync/0.8.0/embassy_sync/watch/struct.Watch.html)
 
 Validation covers the actual shared picoserve router through host TCP sockets and the actual async SHT4x driver through embedded-hal-mock. It does not establish ESP32 hardware success. See `VALIDATION.md` for the build, quality gate and outstanding hardware checks.
+
+## Testable application boundary
+
+Portable application services live in `src/application/` and the `crates/bluetemp-ota` workspace crate; chip ownership and startup stay in `src/board.rs` and the firmware task modules. These are the same implementations called by the MCU and host tests, not parallel test-only algorithms.
+
+- OTA transfer/readback and metadata commit use the standard `embedded-storage 0.3.1` traits. The official `FlashRegion` provides those implementations through the bootloader crate's `embedded-storage` feature. Full upload orchestration also runs against the official bootloader host flash, with the booted-partition lookup supplied explicitly because the real lookup reads ESP32 MMU state.
+- Sensor attempts use the real SHT4x async driver and Embassy timeout; injected I²C errors and stalled driver delays exercise the same sample/recovery path.
+- The PHY adapter uses a shared Embassy timer/cache and LAN8720 negotiation policy, tested across advertisement combinations and idle polling intervals. HAL pin/register ownership remains outside host tests.
+- HTTP workers hand sockets to the existing picoserve server. A shared connection function bounds accept/serve operations using Embassy timeouts. The OTA service uses Embassy `Mutex::try_lock`; tests cover cancellation, retry, concurrent requests and post-commit exclusion.
+- Watchdog checks and latching use the real community watchdog core and Embassy clock/ticker. Host tests advance Embassy's official `MockDriver`; no local time driver was written.
+
+Host-only features are `embassy-time/mock-driver` with `generic-queue-8`, `critical-section/std`, and `esp-bootloader-esp-idf/std` with `embedded-storage`. The bootloader's `std` mock currently also requires `embedded-storage` to compile. Its global mock flash is used by only one integration test; separate standard-trait storage doubles provide read/write/corruption faults. None of these host features enters the firmware build.
+
+The OTA workspace crate owns cryptography, image/partition validation, transfer and boot-record logic. The root application owns sensor state, HTTP policy, task supervision and hardware integration. This separation keeps each crate below RepoRigor's unchanged direct-dependency limit, with the entire workspace still included in analysis, coverage and mutation execution.
+
+RepoRigor uses LLVM export JSON with function regions, plus its documented conservative `unreported_as_zero` policy. Unexecuted hardware adapters receive 0% coverage and the worst-case CRAP score for their complexity. No file exclusions, baseline waivers, or relaxed thresholds are used. The mutation pipeline compiles each candidate separately before running tests, so compiler failures cannot count as killed mutants. Both workspace crates are cleaned before mutation compilation/testing to avoid stale artifacts after source timestamp restoration.

@@ -1,28 +1,10 @@
 //! RTC hardware reset plus task-watchdog's all-tasks-must-progress supervision.
-use bluetemp::supervision::{self, Supervisor, Task};
+use bluetemp::application::supervision::{self, EmbassyClock, Supervisor, Task};
 use core::cell::RefCell;
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::Duration;
 use esp_hal::rtc_cntl::{Rwdt, RwdtStage};
-use task_watchdog::{Clock, HardwareWatchdog, ResetReason};
-
-struct EmbassyClock;
-impl Clock for EmbassyClock {
-    type Instant = Instant;
-    type Duration = Duration;
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-    fn elapsed_since(&self, instant: Instant) -> Duration {
-        Instant::now().saturating_duration_since(instant)
-    }
-    fn has_elapsed(&self, instant: Instant, duration: &Duration) -> bool {
-        self.elapsed_since(instant) >= *duration
-    }
-    fn duration_from_millis(&self, millis: u64) -> Duration {
-        Duration::from_millis(millis)
-    }
-}
+use task_watchdog::{HardwareWatchdog, ResetReason};
 
 struct Hardware(Rwdt);
 impl HardwareWatchdog<EmbassyClock> for Hardware {
@@ -67,18 +49,17 @@ pub fn progress(task: Task) {
 
 #[embassy_executor::task]
 pub async fn run() {
-    let mut ticker = Ticker::every(Duration::from_millis(supervision::CHECK_INTERVAL_MS));
-    loop {
-        ticker.next().await;
-        let starved = SUPERVISOR.lock(|slot| {
-            slot.borrow_mut()
-                .as_mut()
-                .is_none_or(|supervisor| supervisor.check())
-        });
-        if starved {
-            // Latch the fault: later heartbeats cannot resume hardware feeding.
-            esp_println::println!("WATCHDOG: task progress deadline missed; waiting for RTC reset");
-            core::future::pending::<()>().await;
-        }
+    supervision::run(check_tasks).await
+}
+
+fn check_tasks() -> bool {
+    let starved = SUPERVISOR.lock(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .is_none_or(|supervisor| supervisor.check())
+    });
+    if starved {
+        esp_println::println!("WATCHDOG: task progress deadline missed; waiting for RTC reset");
     }
+    starved
 }

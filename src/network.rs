@@ -26,29 +26,29 @@ async fn run(mut runner: Runner<'static, EthDriver>) {
 
 pub async fn monitor(stack: Stack<'static>) -> ! {
     esp_println::println!("Ethernet started; waiting for link and DHCP");
-    let mut previous = (false, None);
     loop {
         let status = (stack.is_link_up(), stack.config_v4());
-        if status != previous {
-            esp_println::println!("Network link={} IPv4={:?}", status.0, status.1);
-            previous = status.clone();
-        }
+        esp_println::println!("Network link={} IPv4={:?}", status.0, status.1);
         select(
-            async {
-                if status.0 {
-                    stack.wait_link_down().await
-                } else {
-                    stack.wait_link_up().await
-                }
-            },
-            async {
-                if status.1.is_some() {
-                    stack.wait_config_down().await
-                } else {
-                    stack.wait_config_up().await
-                }
-            },
+            wait_link_change(stack, status.0),
+            wait_config_change(stack, status.1.is_some()),
         )
         .await;
+    }
+}
+
+async fn wait_link_change(stack: Stack<'_>, up: bool) {
+    if up {
+        stack.wait_link_down().await
+    } else {
+        stack.wait_link_up().await
+    }
+}
+
+async fn wait_config_change(stack: Stack<'_>, configured: bool) {
+    if configured {
+        stack.wait_config_down().await
+    } else {
+        stack.wait_config_up().await
     }
 }

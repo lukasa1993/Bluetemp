@@ -1,4 +1,4 @@
-use bluetemp::supervision::{self, DEADLINES, HARDWARE_TIMEOUT_MS};
+use bluetemp::application::supervision::{self, DEADLINES, HARDWARE_TIMEOUT_MS};
 use std::{cell::Cell, rc::Rc};
 use task_watchdog::{Clock, HardwareWatchdog, ResetReason};
 

@@ -1,10 +1,6 @@
-//! Timer-driven link checks also wake the runner when the cable is unplugged.
-use core::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
-use embassy_time::{Duration, Timer};
+//! Official PHY driver with idle polling and LAN8720 negotiation policy.
+use bluetemp::application::link::{Mode, PollCache, negotiated_mode};
+use core::task::Context;
 use esp_hal::ethernet::{
     mac::{Duplex, LinkState, Speed},
     phy::{MdioBus, Phy, PhyError, generic::GenericPhy},
@@ -12,24 +8,16 @@ use esp_hal::ethernet::{
 
 pub struct TimedPhy {
     inner: GenericPhy,
-    timer: Timer,
-    cached: LinkState,
+    cache: PollCache<LinkState>,
 }
-
 impl TimedPhy {
     pub fn new() -> Self {
         Self {
             inner: GenericPhy::new(1),
-            timer: Timer::after_ticks(0),
-            cached: LinkState {
-                up: false,
-                speed: Speed::_100M,
-                duplex: Duplex::Full,
-            },
+            cache: PollCache::default(),
         }
     }
 }
-
 impl Phy for TimedPhy {
     fn address(&self) -> u8 {
         self.inner.address()
@@ -38,29 +26,24 @@ impl Phy for TimedPhy {
         self.inner.init(mdio)
     }
     fn poll_link<M: MdioBus>(&mut self, mdio: &mut M, cx: Option<&mut Context<'_>>) -> LinkState {
-        if let Some(cx) = cx {
-            if Pin::new(&mut self.timer).poll(cx) == Poll::Pending {
-                return self.cached;
+        self.cache.poll(cx, || {
+            let mut state = self.inner.poll_link(mdio, None);
+            if state.up {
+                (state.speed, state.duplex) =
+                    hardware_mode(negotiated_mode(mdio.read(1, 4), mdio.read(1, 5)));
             }
-            self.timer = Timer::after(Duration::from_millis(500));
-            let _ = Pin::new(&mut self.timer).poll(cx);
-        }
-        self.cached = self.inner.poll_link(mdio, None);
-        if self.cached.up {
-            // Resolve the highest common mode (100-full, 100-half, 10-full, 10-half).
-            // GenericPhy 1.2.1 can misreport duplex for mixed partner advertisements.
-            let common = mdio.read(1, 4) & mdio.read(1, 5);
-            let fast = common & 0x180 != 0;
-            let full = if fast {
-                common & 0x100 != 0
-            } else {
-                common & 0x40 != 0
-            };
-            self.cached.speed = if fast { Speed::_100M } else { Speed::_10M };
-            self.cached.duplex = if full { Duplex::Full } else { Duplex::Half };
-        }
-        // Only the runner reaches this after an actual bounded PHY status check.
-        crate::watchdog::progress(bluetemp::supervision::Task::Network);
-        self.cached
+            // Only a completed actual PHY read counts as runner progress.
+            crate::watchdog::progress(bluetemp::application::supervision::Task::Network);
+            state
+        })
     }
+}
+fn hardware_mode(mode: Mode) -> (Speed, Duplex) {
+    const MODES: [(Speed, Duplex); 4] = [
+        (Speed::_100M, Duplex::Full),
+        (Speed::_100M, Duplex::Half),
+        (Speed::_10M, Duplex::Full),
+        (Speed::_10M, Duplex::Half),
+    ];
+    MODES[mode as usize]
 }

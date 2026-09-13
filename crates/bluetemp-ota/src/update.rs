@@ -31,3 +31,9 @@ pub fn compatible_image(bytes: &[u8]) -> bool {
         && bytes[32..36] == [0x32, 0x54, 0xcd, 0xab]
         && bytes[80..89] == *b"bluetemp\0"
 }
+
+pub fn hex32(input: &[u8]) -> Option<[u8; 32]> {
+    let mut result = [0; 32];
+    hex::decode_to_slice(input, &mut result).ok()?;
+    Some(result)
+}

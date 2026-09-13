@@ -56,7 +56,7 @@ OTA rebuilds, uploads an authenticated image to the inactive slot, verifies it, 
 
 ## Validation and details
 
-The ESP32 build, Clippy, 13 Rust tests and 3 Python tests pass. **RepoRigor currently fails**; hardware recovery and OTA remain untested.
+The ESP32 build, Clippy, 23 Rust tests, 3 Python tests and **RepoRigor pass** (50/50 mutations caught). Hardware recovery and OTA remain untested.
 
 ```sh
 ./scripts/dev quality
@@ -67,5 +67,5 @@ This uses `/Users/l/_DEV/clean-code/reporigor` (override with `REPORIGOR_ROOT`).
 - [Setup, board references and build outputs](docs/SETUP.md)
 - [Embassy and community API choices](docs/EMBASSY.md)
 - [Watchdog behavior and hardware test plan](docs/RELIABILITY.md)
-- [Validation results and open quality findings](docs/VALIDATION.md)
+- [Validation results and hardware tests](docs/VALIDATION.md)
 - [C and binary dependency audit](docs/DEPENDENCIES.md)

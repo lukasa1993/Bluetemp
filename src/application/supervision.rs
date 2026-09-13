@@ -1,4 +1,5 @@
 //! Task deadlines implemented by the community watchdog core, without legacy HALs.
+use embassy_time::{Duration, Instant};
 use task_watchdog::{Clock, HardwareWatchdog, Watchdog, WatchdogConfig};
 
 pub const HARDWARE_TIMEOUT_MS: u64 = 30_000;
@@ -34,4 +35,33 @@ pub fn start<W: HardwareWatchdog<C>, C: Clock>(hardware: W, clock: C) -> Supervi
     }
     supervisor.start();
     supervisor
+}
+
+pub struct EmbassyClock;
+impl Clock for EmbassyClock {
+    type Instant = Instant;
+    type Duration = Duration;
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+    fn elapsed_since(&self, instant: Instant) -> Duration {
+        Instant::now().saturating_duration_since(instant)
+    }
+    fn has_elapsed(&self, instant: Instant, duration: &Duration) -> bool {
+        self.elapsed_since(instant) >= *duration
+    }
+    fn duration_from_millis(&self, millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+}
+
+/// Latch a failed check: late progress must never restart hardware feeding.
+pub async fn run(mut check: impl FnMut() -> bool) -> ! {
+    let mut ticker = embassy_time::Ticker::every(Duration::from_millis(CHECK_INTERVAL_MS));
+    loop {
+        ticker.next().await;
+        if check() {
+            core::future::pending::<()>().await;
+        }
+    }
 }

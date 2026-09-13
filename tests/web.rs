@@ -1,4 +1,4 @@
-use bluetemp::{
+use bluetemp::application::{
     measurement::{Measurement, Reading},
     protocol::{Error, Manifest},
     update,

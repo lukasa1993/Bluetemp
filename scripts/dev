@@ -11,7 +11,6 @@ import re
 import secrets
 import subprocess
 import sys
-import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 import zipfile
@@ -171,30 +170,39 @@ def ota(url):
         connection.close()
 
 
-def test():
-    # Source-restoring mutation tools can preserve timestamps. Never reuse their compiled mutants.
-    with tempfile.TemporaryDirectory(prefix="bluetemp-test-") as directory:
-        previous = ENV.get("CARGO_TARGET_DIR")
+def host_tests(*options):
+    previous = ENV.get("CARGO_TARGET_DIR")
+    try:
         if "REPORIGOR_MUTANT_ID" in ENV:
-            ENV["CARGO_TARGET_DIR"] = directory
-        try:
-            run(["cargo", "+stable", "test", "--locked", "--no-default-features", "--target", host()])
-            run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"])
-        finally:
-            ENV.pop("CARGO_TARGET_DIR", None)
-            if previous is not None:
-                ENV["CARGO_TARGET_DIR"] = previous
+            # Mutations run serially. Remove every application artifact before each test;
+            # source restoration can preserve mtimes. Unchanged dependencies stay cached.
+            ENV["CARGO_TARGET_DIR"] = str(ROOT / "target/mutation-tests")
+            run(["cargo", "+stable", "clean", "--package", "bluetemp", "--package", "bluetemp-ota", "--target", host()])
+        run(["cargo", "+stable", "test", "--workspace", "--locked", "--no-default-features", "--target", host(), *options])
+    finally:
+        ENV.pop("CARGO_TARGET_DIR", None)
+        if previous is not None:
+            ENV["CARGO_TARGET_DIR"] = previous
+
+
+def check_tests():
+    host_tests("--no-run")
+
+
+def test():
+    host_tests()
+    run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"])
 
 
 def quality():
     toolchain()
-    run(["cargo", "+stable", "fmt", "--check"])
-    run(["cargo", "+esp", "clippy", "--release", "--locked", "-Zbuild-std=core", "--", "-D", "warnings"])
+    run(["cargo", "+stable", "fmt", "--all", "--check"])
+    run(["cargo", "+esp", "clippy", "--workspace", "--release", "--locked", "-Zbuild-std=core", "--", "-D", "warnings"])
     test()
-    coverage = ROOT / "target/quality/lcov.info"
+    coverage = ROOT / "target/quality/llvm-cov.json"
     coverage.parent.mkdir(parents=True, exist_ok=True)
-    run(["cargo", "+stable", "llvm-cov", "--locked", "--no-default-features", "--target", host(),
-         "--lcov", "--output-path", coverage])
+    run(["cargo", "+stable", "llvm-cov", "--workspace", "--locked", "--no-default-features", "--target", host(),
+         "--json", "--output-path", coverage])
     executable = REPORIGOR / "target/release/reporigor"
     if not executable.exists():
         run(["cargo", "+stable", "build", "--locked", "--release", "--target", host(), "--manifest-path", REPORIGOR / "Cargo.toml", "-p", "reporigor"])
@@ -211,7 +219,7 @@ def quality():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ["setup", "build", "test", "quality"]:
+    for command in ["setup", "build", "test", "check-tests", "quality"]:
         commands.add_parser(command)
     for command in ["board-info", "flash"]:
         child = commands.add_parser(command)
@@ -220,7 +228,7 @@ def main():
     child = commands.add_parser("ota")
     child.add_argument("url")
     args = parser.parse_args()
-    actions = {"setup": setup, "build": build, "test": test, "quality": quality,
+    actions = {"setup": setup, "build": build, "test": test, "quality": quality, "check-tests": check_tests,
                "board-info": lambda: board_info(args.port, args.manual),
                "flash": lambda: flash(args), "ota": lambda: ota(args.url)}
     result = actions[args.command]()

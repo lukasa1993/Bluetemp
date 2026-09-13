@@ -1,0 +1,22 @@
+[package]
+name = "bluetemp-ota"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[dependencies]
+crc = "=3.4.0"
+hex = { version = "=0.4.3", default-features = false }
+hmac = { version = "=0.12.1", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
+embedded-hal-async = "=1.0.0"
+embedded-io-async = "=0.7.0"
+embedded-storage = "=0.3.1"
+esp-bootloader-esp-idf = { version = "=0.6.0", features = ["embedded-storage"] }
+
+[target.'cfg(not(target_arch = "xtensa"))'.dev-dependencies]
+esp-bootloader-esp-idf = { version = "=0.6.0", features = ["std", "embedded-storage"] }
+
+[lints.rust]
+unsafe_code = "forbid"

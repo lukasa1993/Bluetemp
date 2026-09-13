@@ -7,56 +7,53 @@ Implementation checked on 2026-09-14 on an Apple Silicon Mac. The WT32-ETH01 and
 | Check | Result |
 | --- | --- |
 | `./scripts/dev build` | Passed. Full release build and link for `xtensa-esp32-none-elf`, Xtensa Rust 1.95.0.0, locked dependencies. |
-| `espflash save-image` via build script | Passed. Application-only image **279,968 bytes**, fits each **2,031,616-byte** slot. Header/project/chip and appended SHA256 validated by the script. |
-| `cargo +stable fmt --check` | Passed. |
-| `cargo +esp clippy --release --locked -Zbuild-std=core -- -D warnings` | Passed. |
-| `./scripts/dev test` | Passed: **13 Rust integration tests and 3 Python tests**. |
-| Sensor integration | Actual sht4x async driver over embedded-hal-mock: 0x44 address, 0xfd command, 9 ms async delay, CRC vector, conversion endpoints/clamping and all 48 single-bit sample corruptions; separate freshness boundary tests. |
-| HTTP integration | Actual picoserve router/server on localhost TCP: text/JSON/health/ready/404, initial null values, stale/missing-address 503 responses, busy upload 503, authenticated 5,000-byte body streamed in 1/7/1,024-byte fragments or coalesced, truncated/corrupt payload rejection, ambiguous lengths and malformed authentication headers. The update service is a host test double; actual flash remains untested. |
-| Watchdog core | Actual task-watchdog core with fake clock/hardware: startup grace, each of five tasks independently blocks feeding at its deadline, and all-task progress over ten simulated minutes. RTC timing/reset and executor failure remain untested. |
-| OTA logic | Independent Python HMAC vector; all signature-bit corruptions; wrong digest/key/length; wrong chip/project/truncated image; CRC vectors cross-checked against Python zlib with ESP ROM seed. |
-| Boot selection | Erased metadata, repeated alternating slots, preservation of previous record, torn writes, invalid/aborted records, exhausted sequence numbers. These are host simulations, not flash power-loss tests. |
-| Python upload client | Real localhost HTTP server received exact image bytes and verified the generated length/digest/HMAC headers. No ESP32 was involved. |
-| Host LLVM coverage | Shared library, including the actual HTTP application handlers: **246/248 lines (99.19%)**. Firmware-only modules are absent from that measurement. |
-| Native dependency audit | Active Cargo graph and link map inspected. Only the required ROM flash patch object is linked from the precompiled C archive; GCC CRT startup objects are excluded. No prohibited application runtime or radio library linked. |
+| `espflash save-image` via build script | Passed. Application-only image **280,656 bytes**, fits each **2,031,616-byte** slot. Header/project/chip and appended SHA256 validated by the script. |
+| `cargo +stable fmt --all --check` | Passed. |
+| `cargo +esp clippy --workspace --release --locked -Zbuild-std=core -- -D warnings` | Passed. |
+| `./scripts/dev test` | Passed: **23 Rust integration tests and 3 Python tests** across the workspace. |
+| Sensor integration | Actual sht4x async driver over embedded-hal-mock: command/delay/CRC/conversion, all 48 single-bit sample corruptions, freshness, failed measurement followed by recovery, and bounded measurement/soft-reset timeouts using Embassy's mock clock. |
+| HTTP integration | Actual picoserve router/server on localhost TCP: readings/health/ready/404, initial null values, stale/missing-address 503 responses, malformed headers, busy uploads, and fragmented or coalesced bodies. The router tests use an update-service double; the real coordinator and flash service are tested separately below. |
+| Connection and PHY policy | Shared firmware functions: accept timeout and retry delay, idle acceptance failures, successful/failed handling, absolute connection deadline, negotiated Ethernet modes and the 500 ms PHY polling cache. Actual PHY access remains untested. |
+| Watchdog supervision | Actual task-watchdog core: startup grace, all five task deadlines and ten simulated minutes of progress. Actual Embassy clock adapter and supervisor loop: elapsed-time boundaries and latched starvation despite late progress. RTC hardware/reset remains untested. |
+| OTA coordinator | Actual Embassy mutex service: concurrent exclusion, cancellation, retry after failure, one reboot request after commit and refusal of further updates while awaiting reboot. |
+| OTA flash service | Shared firmware implementation through standard storage traits: fragmented transfers, sector boundaries, truncated/error bodies, bad headers, readback corruption, storage failures, partition validation and metadata commit. The official bootloader library's host flash mock also exercises the complete upload path. These are simulations, not ESP32 flash tests. |
+| OTA authentication and journal | Independent Python HMAC vector, signature-bit corruptions, wrong digest/key/length/chip/project, CRC vectors, alternating slots, preserved previous records, torn/invalid records and exhausted sequences. |
+| Python upload client | Real localhost HTTP server received exact image bytes and verified length/digest/HMAC headers. No ESP32 was involved. |
+| Host LLVM coverage | Shared application and OTA implementation: **512/519 lines (98.65%)**. Hardware adapters are not executed by this measurement. |
+| Native dependency audit | Selected Cargo graph and link map inspected. Only the required ROM flash patch object is linked from the precompiled C archive; GCC CRT startup objects are excluded. No prohibited application runtime or radio library linked. |
 
 The supplied reference `http://192.168.19.129` was read without modification. It returned five dash-separated text fields, including apparent temperature/humidity values. This informed the text endpoint shape, not a compatibility claim about undocumented fields.
 
-## RepoRigor result: NOT PASSED
+## RepoRigor result: PASSED
 
-Used the checkout requested by the user: `/Users/l/_DEV/clean-code/reporigor`, commit `281cde7fd752630f4c218f4817f8c4b6021a1b8a`. Its existing executable was older than its source/documentation, so the current executable was rebuilt from that checkout.
+Used the requested checkout `/Users/l/_DEV/clean-code/reporigor`, commit `281cde7fd752630f4c218f4817f8c4b6021a1b8a`, with the executable rebuilt from that checkout. Backend: **rust-native 0.1.0**. Final exit: **0**. Generated report: `target/quality/reporigor.json`.
 
-Exact final gate command, invoked by `./scripts/dev quality`:
+Exact gate command, invoked by `./scripts/dev quality`:
 
 ```sh
 /Users/l/_DEV/clean-code/reporigor/target/release/reporigor check . \
   --language rust --backend native --allow-project-exec \
   --cargo /Users/l/.rustup/toolchains/esp/bin/cargo \
-  --coverage /Users/l/_DEV/Bluetemp/target/quality/lcov.info \
+  --coverage /Users/l/_DEV/Bluetemp/target/quality/llvm-cov.json \
   --run-mutations --test-command './scripts/dev test' --format json
 ```
 
-Backend: **rust-native 0.1.0**. Exit: **2**. Report: `target/quality/reporigor.json`.
+- **21 Rust files, 83 functions, 470 rule results; zero rule failures or omitted checks.**
+- **50 valid mutations executed, 50 killed: 100% score.** No survivors, compilation errors, timeouts, invalid/ignored candidates or other mutation errors. Baseline compilation and tests both passed.
+- No CRAP violations, parse errors or diagnostics. Three informational duplicate groups remain; the default DRY policy does not fail on them.
+- Unexecuted hardware functions remain selected and are conservatively scored with zero coverage through `crap.unreported_as_zero = true`. This is a worst-case complexity check, not evidence that hardware paths were tested.
 
-- 15 Rust files, 58 functions, zero parse errors or diagnostics.
-- No CRAP threshold violations in measured functions; KISS, YAGNI and coupling rules passed.
-- The default cohesion rule flags `src/protocol.rs` (0.0 versus a 0.1 minimum). Its module-level helpers are not connected by the tool's qualified direct-reference graph. This finding remains unwaived.
-- Two informational duplicate groups; the default DRY rule does not fail on them.
-- **54 mutations executed: 34 killed, 20 survived**, score **62.96%**, below the default 80% minimum. All survivors are in firmware-only HTTP flash coordination, Ethernet, PHY, sensor-task, watchdog clock adapter or flash-I/O paths. The shared text-response freshness/IP condition is now covered and its mutation is killed. No survivor has been waived as equivalent.
-- **41 functions lack an unambiguous coverage match**: 34 unmatched and 7 ambiguous. One `crap.maximum` check is explicitly omitted because of missing coverage. These figures differ from LLVM's line coverage because the native adapter needs a unique function match.
+The previous failed gate was addressed by moving recovery and OTA behavior into shared application code, adding fault-injection tests, simplifying the protocol helpers and giving the OTA service its own crate. The application has 10 direct non-target-gated production dependencies and the OTA crate has 8, within the unchanged limit of 12. LLVM JSON supplies function regions that the previous line-only coverage input could not match reliably.
 
+No thresholds were weakened, source files excluded, survivors waived or baselines introduced. Mutation runs are serial and clean both workspace packages before compilation and testing, while retaining only unchanged dependency artifacts. A separate `./scripts/dev check-tests` validation command rejects non-compiling candidates before the tests run. This final run supersedes an earlier result that counted an invalid generated let-chain expression as a killed mutation; that expression was replaced with a `match` guard.
 
-No thresholds were weakened, source files hidden, or baselines introduced. Mutation runs use fresh temporary Cargo target directories so timestamp restoration cannot reuse a previously compiled mutant. This report supersedes the previous refactor's 64% score; adding firmware-only supervision/HTTP coordination increased the untested mutation surface. The sources were restored by the mutation runner, then the final release image was rebuilt successfully.
-
-The complete sources build and pass normal tests. The RepoRigor gate is still **not passed**. A complete pass needs meaningful coverage of device-only paths and resolution of the cohesion finding. No production or hardware validation is claimed.
-
-Final application-only image SHA256:
+The final firmware image was rebuilt after mutation sources were restored. Application-only image SHA256:
 
 ```text
-fd652bd3c046089d6f7eb0431eb15662cd7a0d6f182a16d4c084e5cca1f20edf
+0e563a637c8370f1f03c3a43987bfb038a48a278c21457567c1f330febd991ad
 ```
 
-The detailed [Embassy/community audit](EMBASSY.md) records the official and community replacements and the small hardware-specific exceptions.
+The [Embassy/community audit](EMBASSY.md) records the official and community components and the remaining hardware-specific adapters. Passing software checks does not establish board reliability or automatic recovery from a broken OTA application; application-health rollback is not implemented.
 
 ## Hardware tests still required
 

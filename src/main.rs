@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![recursion_limit = "256"]
 
 mod board;
 mod http;
@@ -39,6 +40,6 @@ async fn periodic(stack: embassy_net::Stack<'static>) {
             sensor::snapshot(),
             stack.config_v4()
         );
-        watchdog::progress(bluetemp::supervision::Task::Periodic);
+        watchdog::progress(bluetemp::application::supervision::Task::Periodic);
     }
 }

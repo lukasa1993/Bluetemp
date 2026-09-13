@@ -104,7 +104,8 @@ dependencies = [
 name = "bluetemp"
 version = "0.1.0"
 dependencies = [
- "crc",
+ "bluetemp-ota",
+ "critical-section",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",
@@ -113,6 +114,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-mock",
  "embedded-io-async 0.7.0",
+ "embedded-storage",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
  "esp-hal",
@@ -120,8 +122,8 @@ dependencies = [
  "esp-rtos",
  "esp-storage",
  "heapless 0.9.3",
- "hex",
  "hmac",
+ "md-5",
  "picoserve",
  "serde",
  "serde_json",
@@ -130,6 +132,20 @@ dependencies = [
  "static_cell",
  "task-watchdog",
  "tokio",
+]
+
+[[package]]
+name = "bluetemp-ota"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "embedded-hal-async",
+ "embedded-io-async 0.7.0",
+ "embedded-storage",
+ "esp-bootloader-esp-idf",
+ "hex",
+ "hmac",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -565,6 +581,7 @@ dependencies = [
  "critical-section",
  "document-features",
  "embassy-time-driver",
+ "embassy-time-queue-utils",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -774,13 +791,16 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba0e487f6843419bb085d871f6e860da1bb8c267ce1c5db1051b83882e943054"
 dependencies = [
+ "crc",
  "document-features",
+ "embedded-storage",
  "esp-config",
  "esp-hal-procmacros",
  "esp-metadata-generated",
  "esp-rom-sys",
  "esp-storage",
  "jiff",
+ "md-5",
  "sha2 0.11.0",
  "strum",
 ]
@@ -1378,6 +1398,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
 ]
 
 [[package]]

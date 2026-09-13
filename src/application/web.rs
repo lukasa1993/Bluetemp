@@ -1,5 +1,5 @@
 //! Shared picoserve application, used by the MCU and host HTTP integration tests.
-use crate::{
+use super::{
     measurement::Reading,
     protocol::{self, Error, Manifest},
 };
@@ -119,16 +119,18 @@ async fn json(State(status): State<Status>) -> impl IntoResponse {
     .with_header("Cache-Control", "no-store")
 }
 
-impl IntoResponse for Error {
+struct Failure(Error);
+
+impl IntoResponse for Failure {
     async fn write_to<R: Read, W: ResponseWriter<Error = R::Error>>(
         self,
         connection: picoserve::response::Connection<'_, R>,
         writer: W,
     ) -> Result<ResponseSent, W::Error> {
-        let status = match self {
-            Self::Authentication => StatusCode::FORBIDDEN,
-            Self::Flash => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::Busy => StatusCode::SERVICE_UNAVAILABLE,
+        let status = match self.0 {
+            Error::Authentication => StatusCode::FORBIDDEN,
+            Error::Flash => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Busy => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::BAD_REQUEST,
         };
         Response::new(status, "Request failed\n")
@@ -146,7 +148,7 @@ impl<D: Device> RequestHandlerService<D> for Upload {
         mut request: Request<'_, R>,
         writer: W,
     ) -> Result<ResponseSent, W::Error> {
-        let result = match Manifest::from_headers(request.parts.headers()) {
+        let result = match protocol::manifest(request.parts.headers()) {
             Ok(manifest) => {
                 let body = request.body_connection.body().reader();
                 // Picoserve's native override gives accepted uploads a longer body budget.
@@ -160,6 +162,7 @@ impl<D: Device> RequestHandlerService<D> for Upload {
         };
         result
             .map(|()| "Update verified; rebooting\n")
+            .map_err(Failure)
             .write_to(request.body_connection.finalize().await?, writer)
             .await
     }
@@ -186,7 +189,11 @@ impl<D> Layer<D, ()> for StrictHeaders {
     ) -> Result<ResponseSent, W::Error> {
         match protocol::validate_headers(parts.headers()) {
             Ok(()) => next.run(state, (), writer).await,
-            Err(error) => error.write_to(next.into_connection().await?, writer).await,
+            Err(error) => {
+                Failure(error)
+                    .write_to(next.into_connection().await?, writer)
+                    .await
+            }
         }
     }
 }

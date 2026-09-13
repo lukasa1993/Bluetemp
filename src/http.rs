@@ -1,25 +1,22 @@
 use crate::{ota, sensor, watchdog};
-use bluetemp::{
+use bluetemp::application::{
+    connection,
     protocol::{Error, Manifest},
     supervision::Task,
+    update_service::UpdateService,
     web::{self, Device, Status},
 };
 use embassy_executor::Spawner;
 use embassy_net::{Stack, tcp::TcpSocket};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_io_async::Read;
 use esp_storage::FlashStorage;
 use static_cell::StaticCell;
 
-struct FlashState {
-    storage: FlashStorage<'static>,
-    committed: bool,
-}
-
 struct Services {
     stack: Stack<'static>,
-    flash: Mutex<CriticalSectionRawMutex, FlashState>,
+    flash: UpdateService<FlashStorage<'static>>,
 }
 
 static SERVICES: StaticCell<Services> = StaticCell::new();
@@ -38,24 +35,18 @@ impl Device for &Services {
     }
 
     async fn update<R: Read>(&self, manifest: &Manifest, body: &mut R) -> Result<(), Error> {
-        // Never queue another upload behind flash work or overwrite a committed image.
-        let mut flash = self.flash.try_lock().map_err(|_| Error::Busy)?;
-        if flash.committed {
-            return Err(Error::Busy);
-        }
-        let result = with_timeout(
-            Duration::from_secs(180),
-            ota::upload(body, &mut flash.storage, manifest),
-        )
-        .await
-        .map_err(|_| Error::Socket)?;
-        if result.is_ok() {
-            // No await between successful metadata commit, exclusion and reboot signal.
-            flash.committed = true;
-            REBOOT.signal(());
-        } else {
-            esp_println::println!("OTA failed: {:?}", result);
-        }
+        let result = self
+            .flash
+            .update(
+                async |flash| {
+                    with_timeout(Duration::from_secs(180), ota::upload(body, flash, manifest))
+                        .await
+                        .map_err(|_| Error::Socket)?
+                },
+                || REBOOT.signal(()),
+            )
+            .await;
+        log_update(result);
         result
     }
 }
@@ -63,10 +54,7 @@ impl Device for &Services {
 pub fn start(spawner: &Spawner, stack: Stack<'static>, flash: FlashStorage<'static>) {
     let services = &*SERVICES.init(Services {
         stack,
-        flash: Mutex::new(FlashState {
-            storage: flash,
-            committed: false,
-        }),
+        flash: UpdateService::from(flash),
     });
     spawner.spawn(worker(services, Task::Http0).expect("HTTP worker 0 slot"));
     spawner.spawn(worker(services, Task::Http1).expect("HTTP worker 1 slot"));
@@ -88,24 +76,19 @@ async fn worker(services: &'static Services, id: Task) {
     loop {
         watchdog::progress(id);
         let mut socket = TcpSocket::new(services.stack, &mut rx, &mut tx);
-        // Bounded accept makes idle progress observable even with no cable or DHCP.
-        if !matches!(
-            with_timeout(Duration::from_secs(5), socket.accept(80)).await,
-            Ok(Ok(()))
-        ) {
-            Timer::after(Duration::from_millis(100)).await;
-            continue;
-        }
         socket.set_timeout(Some(Duration::from_secs(15)));
-        // Picoserve owns HTTP; Embassy bounds the entire connection, including shutdown.
-        let result = with_timeout(
-            Duration::from_secs(190),
-            picoserve::Server::new(&app, &config, &mut buffer).serve(socket),
+        let result = connection::serve(
+            socket,
+            async |socket| socket.accept(80).await,
+            async |socket| {
+                picoserve::Server::new(&app, &config, &mut buffer)
+                    .serve(socket)
+                    .await
+                    .map(|_| ())
+            },
         )
         .await;
-        if !matches!(result, Ok(Ok(_))) {
-            esp_println::println!("HTTP {:?}: connection failed or timed out", id);
-        }
+        log_connection(id, result);
     }
 }
 
@@ -115,4 +98,16 @@ async fn reboot() {
     // Independent of response/connection errors: committed updates always reboot.
     Timer::after(Duration::from_secs(2)).await;
     esp_hal::system::software_reset();
+}
+
+fn log_connection(id: Task, result: Result<(), ()>) {
+    if result.is_err() {
+        esp_println::println!("HTTP {:?}: connection failed or timed out", id);
+    }
+}
+
+fn log_update(result: Result<(), Error>) {
+    if let Err(error) = result {
+        esp_println::println!("OTA failed: {:?}", error);
+    }
 }

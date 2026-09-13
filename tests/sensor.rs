@@ -1,4 +1,4 @@
-use bluetemp::measurement::{self, Reading};
+use bluetemp::application::measurement::{self, Reading};
 use embedded_hal_mock::eh1::{
     delay::{CheckedDelay, Transaction as Delay},
     i2c::{Mock, Transaction as I2c},
@@ -53,4 +53,65 @@ fn freshness_rejects_initial_failed_and_old_samples() {
     assert!(!reading.is_fresh(15_101));
     reading.last_ok = false;
     assert!(!reading.is_fresh(101));
+}
+
+#[tokio::test]
+async fn sampling_recovers_from_bus_errors_and_bounds_stalled_operations() {
+    use embassy_time::{Duration, MockDriver};
+    use embedded_hal_async::i2c::ErrorKind;
+    let clock = MockDriver::get();
+    clock.reset();
+    let mut reading = Reading::default();
+    let mut bus = Mock::new(&[
+        I2c::write(0x44, vec![0xfd]).with_error(ErrorKind::Other),
+        I2c::write(0x44, vec![0x94]),
+        I2c::write(0x44, vec![0xfd]),
+        I2c::read(0x44, vec![0xbe, 0xef, 0x92, 0xbe, 0xef, 0x92]),
+    ]);
+    let mut delay = CheckedDelay::new(&[Delay::async_delay_ms(1), Delay::async_delay_ms(9)]);
+    let mut sensor = sht4x::Sht4xAsync::new(&mut bus);
+    measurement::sample(&mut sensor, &mut reading, &mut delay).await;
+    assert_eq!(reading.errors, 1);
+    assert!(!reading.last_ok);
+    assert_eq!(reading.value, None);
+    clock.advance(Duration::from_millis(5000));
+    measurement::sample(&mut sensor, &mut reading, &mut delay).await;
+    assert!(reading.is_fresh(5000));
+    assert_eq!(reading.sampled_ms, 5000);
+    assert_eq!(reading.errors, 1);
+    bus.done();
+    delay.done();
+
+    struct StalledDelay;
+    impl embedded_hal_async::delay::DelayNs for StalledDelay {
+        async fn delay_ns(&mut self, _: u32) {
+            std::future::pending::<()>().await;
+        }
+    }
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+    let mut bus = Mock::new(&[I2c::write(0x44, vec![0xfd]), I2c::write(0x44, vec![0x94])]);
+    let mut sensor = sht4x::Sht4xAsync::new(&mut bus);
+    let previous = reading.value;
+    {
+        let mut delay = StalledDelay;
+        let mut attempt = pin!(measurement::sample(&mut sensor, &mut reading, &mut delay));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(attempt.as_mut().poll(&mut cx).is_pending());
+        clock.advance(Duration::from_millis(249));
+        assert!(attempt.as_mut().poll(&mut cx).is_pending());
+        clock.advance(Duration::from_millis(1));
+        assert!(attempt.as_mut().poll(&mut cx).is_pending());
+        clock.advance(Duration::from_millis(99));
+        assert!(attempt.as_mut().poll(&mut cx).is_pending());
+        clock.advance(Duration::from_millis(1));
+        assert_eq!(attempt.as_mut().poll(&mut cx), Poll::Ready(()));
+    }
+    assert_eq!(reading.errors, 2);
+    assert!(!reading.last_ok);
+    assert_eq!(reading.value, previous);
+    bus.done();
 }

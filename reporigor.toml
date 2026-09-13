@@ -1,0 +1,10 @@
+[crap]
+# Hardware adapters remain selected and receive the worst-case score when unexecuted.
+unreported_as_zero = true
+
+[mutation]
+# The test command cleans application artifacts in a shared dependency cache.
+workers = 1
+
+# Reject non-compiling mutations before scoring runtime test failures.
+validation_command = "./scripts/dev check-tests"

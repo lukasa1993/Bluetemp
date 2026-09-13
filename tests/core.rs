@@ -1,4 +1,4 @@
-use bluetemp::{ota_record, protocol, update};
+use bluetemp::application::{ota_record, protocol, update};
 
 #[test]
 fn hex_and_authenticated_manifest_match_python_vector() {
