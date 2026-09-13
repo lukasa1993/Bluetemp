@@ -1,0 +1,9 @@
+[build]
+target = "xtensa-esp32-none-elf"
+
+[target.xtensa-esp32-none-elf]
+rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "link-arg=-nostartfiles", "-C", "force-frame-pointers=yes"]
+
+[env]
+ESP_HAL_CONFIG_MIN_CHIP_REVISION = "300"
+ESP_LOG = "info"
