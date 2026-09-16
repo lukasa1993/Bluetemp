@@ -6,14 +6,18 @@ Bare-metal Rust firmware for a **WT32-ETH01** with an **SHT40 temperature/humidi
 
 ## Sensor wiring
 
-| Board | SHT40 |
+| Board | Module |
 | --- | --- |
-| GPIO32 | SDA |
-| GPIO33 | SCL |
-| 3V3 | VDD |
+| GPIO33 (often labelled 485_EN) | TX |
+| 5V supply | +5V / VIN |
 | GND | GND |
 
-I²C runs at 10 kHz, address `0x44`. Use 2.2 kΩ pull-ups to 3.3 V and 100 nF decoupling at the sensor; check existing breakout pull-ups first. Keep the cable short and test the actual assembly—even under 1 m is not a reliability guarantee. See [full wiring and board documentation](docs/SETUP.md#wiring).
+The supported module is a 5 V UART SHT40 unit that auto-transmits
+`R:053.8RH 024.9C` frames at 9600 8N1 (about 1 Hz). Its RX stays
+unconnected; the firmware only listens. UART is receive-only on GPIO33,
+so a bare I²C SHT40 is not interchangeable with this build. I²C runs
+nowhere in this configuration; do not connect module TX/RX to SDA/SCL
+expectations from other SHT40 breakouts.
 
 ## Build and flash
 
@@ -45,7 +49,7 @@ Connect Ethernet to a LAN with DHCP. The assigned IP appears in serial logs.
 | `/ready` | 200 with fresh data and IPv4; otherwise 503 |
 | `/health` | HTTP application liveness |
 
-Samples are taken every 5 seconds. Failed or stale readings return **503** from the reading endpoints; JSON retains the previous sample with `fresh:false`.
+Samples follow the module's ~1 Hz UART frames. Failed or stale readings return **503** from the reading endpoints; JSON retains the previous sample with `fresh:false`.
 
 ```sh
 curl http://DEVICE_IP/api/reading

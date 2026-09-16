@@ -20,18 +20,24 @@ The Ethernet wiring is already on the WT32-ETH01. Verified against the manufactu
 
 Wire the sensor directly, without extenders:
 
-| WT32-ETH01 | SHT40 |
+| WT32-ETH01 | UART SHT40 module |
 | --- | --- |
-| GPIO32 (often labelled CFG) | SDA |
-| GPIO33 (often labelled 485_EN) | SCL |
-| 3V3 | VDD / 3.3 V input |
+| GPIO33 (often labelled 485_EN) | TX |
+| 5V supply rail | +5V / VIN |
 | GND | GND |
 
-Use external **2.2 kΩ pull-ups from SDA and SCL to 3.3 V**, located at the board, and a **100 nF decoupling capacitor at the sensor**. Check the sensor breakout's existing pull-ups first; do not unknowingly stack multiple strong pull-ups. Never pull either signal up to 5 V. Supply the WT32-ETH01 through its specified 5 V input from a suitable supply, with common ground; do not rely on a USB-UART adapter's weak 3.3 V supply.
+The module is a 5 V unit that auto-transmits `R:053.8RH 024.9C` frames at
+**9600 8N1** (about 1 Hz). Its RX stays unconnected. UART is receive-only;
+there is no I²C on this build, so SDA/SCL labelling on other SHT40
+breakouts does not apply. Never feed module TX levels above 3.3 V into an
+ESP32 GPIO; the verified module idles at 3.3 V. Supply the WT32-ETH01 through its specified 5 V input from a suitable supply, with common ground; do not rely on a USB-UART adapter's weak 3.3 V supply.
 
-I²C is deliberately configured at **10 kHz**, address **0x44**. SHT40 variants with another address require changing the address in `src/sensor.rs`. The sensor supports I²C only, not native SPI or 1-Wire. See [Sensirion's electrical specifications and commands](https://sensirion.com/media/documents/33FD6951/6555C40E/Sensirion_Datasheet_SHT4x.pdf).
-
-**A direct 2–3 m I²C cable is an unverified hardware constraint, not a guaranteed range.** Lower clock speed helps timing but does not eliminate capacitance, ringing, voltage drop, or noise. Keep the cable away from mains and switching power wiring. Twisting is optional: if practical, pair SDA with ground and SCL with ground, rather than SDA with SCL. Test at the full intended length. The firmware reports errors and stale values; it cannot repair unsuitable electrical signalling. No extenders are required by this design.
+Sampling follows the module's ~1 Hz frames; a missed line is one error and
+another sample follows on the next frame. Old values remain available in
+JSON but have `fresh:false`; `/` and `/api/reading` return **503** when the
+last attempt failed or the sample is older than 15 seconds. JSON numbers
+are rendered with `core::fmt` (one decimal): picoserve's float path widens
+`f32` to `f64`, which misprints on this Xtensa soft-float target.
 
 ## Build
 
@@ -105,7 +111,7 @@ curl http://DEVICE_IP/api/reading
 ./scripts/dev ota http://DEVICE_IP
 ```
 
-The root's five-field text format resembles the supplied reference service, whose undocumented first two fields are not assumed to have the same meaning. Temperature uses °C; humidity uses %RH. Measurements occur immediately at startup and every 5 seconds. Both sensor CRCs must pass. A failed read causes a bounded soft-reset attempt and another sample on the next tick. Old values remain available in JSON but have `fresh:false`; `/` and `/api/reading` return **503** when the last attempt failed or the sample is older than 15 seconds. Before any valid reading, JSON values are `null`.
+The root's five-field text format resembles the supplied reference service, whose undocumented first two fields are not assumed to have the same meaning. Temperature uses °C; humidity uses %RH. Frames arrive about once per second; each line is one sample. A malformed line or a 3-second gap counts one error. Old values remain available in JSON but have `fresh:false`; `/` and `/api/reading` return **503** when the last attempt failed or the sample is older than 15 seconds. Before any valid reading, JSON values are `null`.
 
 `ota` rebuilds, validates the application image and its appended SHA256, then sends its exact byte length, SHA256 and HMAC-SHA256 signature. The firmware authenticates the manifest before flash writes, verifies the project/chip header, writes the **inactive** slot, hashes its flash contents, and changes boot selection only when the digest matches. It then reboots. An incomplete/invalid transfer leaves the current boot selection untouched. Metadata has two independent sectors; torn records are rejected by CRC.
 

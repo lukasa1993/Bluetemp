@@ -4,9 +4,8 @@ use esp_hal::{
     clock::CpuClock,
     ethernet::{Ethernet, EthernetDmaStorage, RmiiPinBundle, clock::ExternalRefClock},
     gpio::{Level, Output, OutputConfig},
-    i2c::master::{Config, I2c},
-    time::Rate,
     timer::timg::TimerGroup,
+    uart::{Config, UartRx},
 };
 use esp_storage::FlashStorage;
 use static_cell::ConstStaticCell;
@@ -14,7 +13,7 @@ use static_cell::ConstStaticCell;
 use crate::phy::TimedPhy;
 
 pub type EthDriver = Ethernet<'static, esp_hal::Async, TimedPhy>;
-pub type SensorBus = I2c<'static, esp_hal::Async>;
+pub type SensorBus = UartRx<'static, esp_hal::Async>;
 static DMA: ConstStaticCell<EthernetDmaStorage<8, 8>> =
     ConstStaticCell::new(EthernetDmaStorage::new());
 
@@ -68,14 +67,12 @@ pub async fn init() -> Board {
     .expect("Ethernet initialization failed")
     .into_async();
 
-    let sensor = I2c::new(
-        p.I2C0,
-        Config::default().with_frequency(Rate::from_hz(10_000)),
-    )
-    .expect("I2C configuration")
-    .with_sda(p.GPIO32)
-    .with_scl(p.GPIO33)
-    .into_async();
+    // UART SHT40 module: 9600 8N1 auto-transmit; module TX feeds GPIO33.
+    // The module needs no commands, so its RX stays unconnected.
+    let sensor = UartRx::new(p.UART1, Config::default().with_baudrate(9600))
+        .expect("UART configuration")
+        .with_rx(p.GPIO33)
+        .into_async();
     Board {
         ethernet,
         ethernet_enable: enable,

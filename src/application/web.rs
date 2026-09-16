@@ -10,7 +10,7 @@ use picoserve::{
     extract::{FromRef, State},
     io::Read,
     request::{Request, RequestParts},
-    response::{IntoResponse, Json, Response, ResponseWriter, StatusCode},
+    response::{IntoResponse, Response, ResponseWriter, StatusCode},
     routing::{self, Layer, Next, PathRouter, RequestHandlerService},
 };
 
@@ -89,34 +89,57 @@ async fn text(State(status): State<Status>) -> impl IntoResponse {
     }
 }
 
-#[derive(serde::Serialize)]
-struct ReadingJson {
-    firmware: &'static str,
-    uptime_ms: u64,
-    fresh: bool,
-    errors: u32,
-    temperature_c: Option<f32>,
-    humidity_percent: Option<f32>,
-    age_ms: Option<u64>,
-}
-
 async fn json(State(status): State<Status>) -> impl IntoResponse {
     let reading = status.reading;
     let fresh = reading.is_fresh(status.uptime_ms);
-    Json(ReadingJson {
-        firmware: env!("CARGO_PKG_VERSION"),
-        uptime_ms: status.uptime_ms,
+    // Floats are rendered with core::fmt: picoserve's JSON float path widens
+    // f32 to f64, which misprints on this Xtensa soft-float target, while
+    // integers and core::fmt output are exact.
+    let mut body = String::<256>::new();
+    let formatted = write!(
+        body,
+        "{{\"firmware\":\"{}\",\"uptime_ms\":{},\"fresh\":{},\"errors\":{},\"temperature_c\":{},\"humidity_percent\":{},\"age_ms\":{}}}",
+        env!("CARGO_PKG_VERSION"),
+        status.uptime_ms,
         fresh,
-        errors: reading.errors,
-        temperature_c: reading.value.map(|v| v.temperature_c),
-        humidity_percent: reading.value.map(|v| v.humidity_percent),
-        age_ms: reading
-            .value
-            .map(|_| status.uptime_ms.saturating_sub(reading.sampled_ms)),
-    })
-    .into_response()
-    .with_status_code(reading_status(fresh))
-    .with_header("Cache-Control", "no-store")
+        reading.errors,
+        JsonFloat(reading.value.map(|v| v.temperature_c)),
+        JsonFloat(reading.value.map(|v| v.humidity_percent)),
+        JsonAge(
+            reading
+                .value
+                .map(|_| status.uptime_ms.saturating_sub(reading.sampled_ms))
+        ),
+    );
+    match formatted {
+        Ok(()) => Ok(Response::new(reading_status(fresh), body)
+            .with_header("Content-Type", "application/json")
+            .with_header("Cache-Control", "no-store")),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// One-decimal JSON number (the module's own resolution) or `null`.
+struct JsonFloat(Option<f32>);
+
+impl core::fmt::Display for JsonFloat {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(value) => write!(f, "{value:.1}"),
+            None => write!(f, "null"),
+        }
+    }
+}
+
+struct JsonAge(Option<u64>);
+
+impl core::fmt::Display for JsonAge {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(age) => write!(f, "{age}"),
+            None => write!(f, "null"),
+        }
+    }
 }
 
 struct Failure(Error);

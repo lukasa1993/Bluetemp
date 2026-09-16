@@ -40,6 +40,39 @@ async fn async_driver_checks_sensor_crc_and_units() {
 }
 
 #[test]
+fn uart_frame_parses_live_module_output() {
+    // Captured from the module at 9600 baud: `R:053.8RH 024.9C\r\n`.
+    let value = measurement::parse_uart_frame(b"R:053.8RH 024.9C\r").unwrap();
+    assert!((value.temperature_c - 24.9).abs() < 0.001);
+    assert!((value.humidity_percent - 53.8).abs() < 0.001);
+    let bare = measurement::parse_uart_frame(b"R:100.0RH -04.5C").unwrap();
+    assert!((bare.humidity_percent - 100.0).abs() < 0.001);
+    assert!((bare.temperature_c + 4.5).abs() < 0.001);
+    for bad in [
+        &b""[..],
+        b"\n",
+        b"R:053.8RH 024.9C\r\n",
+        b"X:053.8RH 024.9C",
+        b"R-053.8RH 024.9C",
+        b"R:053.8RX 024.9C",
+        b"R:053.8RH 024.9",
+        b"R:053,8RH 024.9C",
+        b"R:05.38RH 024.9C",
+        b"R:05A.8RH 024.9C",
+        b"R:053.8RH 024.9F",
+        b"R:053.8RH024.9C",
+        b"R:053.8Rh 024.9C",
+        b"R:101.0RH 024.9C",
+        b"R:053.8RH 200.0C",
+        b"R:053.8RH -50.0C",
+        b"R:053.8RH -A4.5C",
+        b"R:053.8RH -045.C",
+    ] {
+        assert!(measurement::parse_uart_frame(bad).is_none(), "{bad:?}");
+    }
+}
+
+#[test]
 fn freshness_rejects_initial_failed_and_old_samples() {
     let mut reading = Reading::default();
     assert!(!reading.is_fresh(0));

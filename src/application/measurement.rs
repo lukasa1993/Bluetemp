@@ -42,6 +42,72 @@ pub async fn measure<I: I2c, D: DelayNs>(
     })
 }
 
+/// Parse one ASCII frame from the UART sensor module, e.g. `R:053.8RH 024.9C`
+/// with an optional trailing `\r` (the caller strips the `\n` terminator).
+/// Returns `None` for malformed or implausible frames.
+pub fn parse_uart_frame(line: &[u8]) -> Option<Measurement> {
+    let line = match line.last() {
+        Some(b'\r') => &line[..line.len() - 1],
+        _ => line,
+    };
+    if line.len() != 16
+        || line[0] != b'R'
+        || line[1] != b':'
+        || line[7] != b'R'
+        || line[8] != b'H'
+        || line[9] != b' '
+        || line[15] != b'C'
+    {
+        return None;
+    }
+    let humidity_percent = parse_ddd_dot_d(&line[2..7])?;
+    let temperature_c = parse_temp_field(&line[10..15])?;
+    if !(0.0..=100.0).contains(&humidity_percent) || !(-45.0..=130.0).contains(&temperature_c) {
+        return None;
+    }
+    Some(Measurement {
+        temperature_c,
+        humidity_percent,
+    })
+}
+
+/// Parse a `DDD.D` field such as `053.8`.
+fn parse_ddd_dot_d(field: &[u8]) -> Option<f32> {
+    if field.len() != 5 || field[3] != b'.' {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for &digit in &[field[0], field[1], field[2], field[4]] {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u32::from(digit - b'0');
+    }
+    Some(value as f32 / 10.0)
+}
+
+/// Parse a temperature field: `DDD.D` or `-DD.D` for sub-zero readings.
+fn parse_temp_field(field: &[u8]) -> Option<f32> {
+    if field.len() != 5 {
+        return None;
+    }
+    if field[0] == b'-' {
+        if field[3] != b'.' {
+            return None;
+        }
+        let mut value: u32 = 0;
+        for &digit in &[field[1], field[2], field[4]] {
+            if !digit.is_ascii_digit() {
+                return None;
+            }
+            value = value * 10 + u32::from(digit - b'0');
+        }
+        Some(-(value as f32) / 10.0)
+    } else {
+        parse_ddd_dot_d(field)
+    }
+}
+
 /// Complete one bounded attempt, including state publication data and sensor recovery.
 pub async fn sample<I: I2c, D: DelayNs>(
     sensor: &mut sht4x::Sht4xAsync<I, D>,
