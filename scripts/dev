@@ -27,7 +27,8 @@ ENV["ESPFLASH_SKIP_UPDATE_CHECK"] = "true"
 
 
 def run(args, **kwargs):
-    return subprocess.run([str(arg) for arg in args], cwd=ROOT, env=ENV, check=True, **kwargs)
+    kwargs.setdefault("check", True)
+    return subprocess.run([str(arg) for arg in args], cwd=ROOT, env=ENV, **kwargs)
 
 
 def host():
@@ -121,11 +122,12 @@ def board_info(port, manual=False):
     command = [BIN / "espflash", "board-info", "--port", port, "--non-interactive", "--no-stub", "--after", "no-reset"]
     if manual:
         command += ["--before", "no-reset"]
-    result = run(command, capture_output=True, text=True)
+    result = run(command, capture_output=True, text=True, check=False)
     output = result.stdout + result.stderr
-    print(output, end="")
+    print(output, end="", file=sys.stderr if result.returncode else sys.stdout)
     (ROOT / "target").mkdir(exist_ok=True)
     (ROOT / "target/board-info.txt").write_text(output)
+    result.check_returncode()
     return output
 
 
